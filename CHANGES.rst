@@ -4,6 +4,7 @@ Changelog
 2.6.0 (unreleased)
 ------------------
 
+- #2694 Add version wrapper for AT and DX contents
 - #2695 Support for relativedelta and ymd in api.dtime
 - #2701 Make expected sampling date optional
 - #2700 Fix missing condition fieldname in sample add form statusmessage
