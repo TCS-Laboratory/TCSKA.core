@@ -181,7 +181,7 @@ def get_translators_section():
 
         trans = list()
         if lang_name and lang_iso and translators_list:
-            translators_list = list(set(translators_list))
+            translators_list = sorted(list(set(translators_list)))
             for translator in translators_list:
                 line = '- {}, {} ({})\n'.format(translator, lang_name, lang_iso)
                 trans.append(line)
