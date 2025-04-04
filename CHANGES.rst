@@ -1,7 +1,7 @@
 Changelog
 =========
 
-2.6.0 (unreleased)
+2.6.0 (2025-04-04)
 ------------------
 
 - #2694 Add version wrapper for AT and DX contents
