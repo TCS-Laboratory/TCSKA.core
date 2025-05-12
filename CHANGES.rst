@@ -4,6 +4,7 @@ Changelog
 2.7.0 (unreleased)
 ------------------
 
+- #2723 Add registry to control import file attachment to Worksheet assigned analyses
 - #2722 Fix instrument import loggings
 - #2720 Allow to set custom IDs to reference samples
 - #2721 Retain result for analysis retest
