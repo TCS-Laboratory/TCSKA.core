@@ -4,6 +4,7 @@ Changelog
 2.7.0 (unreleased)
 ------------------
 
+- #2719 jQuery3 compatibility
 - #2724 Allow to select an analyst and template in the create worksheet modal
 - #2723 Add registry to control import file attachment to Worksheet assigned analyses
 - #2722 Fix instrument import loggings

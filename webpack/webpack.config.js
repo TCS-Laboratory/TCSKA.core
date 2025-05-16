@@ -177,23 +177,23 @@ module.exports = {
       files: [{
         src: [
           // legacy.js
-          "../src/senaite/core/browser/static/js/bika.lims.analysisrequest.js",
-          "../src/senaite/core/browser/static/js/bika.lims.artemplate.js",
-          "../src/senaite/core/browser/static/js/bika.lims.batch.js",
-          "../src/senaite/core/browser/static/js/bika.lims.bikasetup.js",
-          "../src/senaite/core/browser/static/js/bika.lims.calculation.edit.js",
-          "../src/senaite/core/browser/static/js/bika.lims.client.js",
-          "../src/senaite/core/browser/static/js/bika.lims.common.js",
-          "../src/senaite/core/browser/static/js/bika.lims.graphics.controlchart.js",
-          "../src/senaite/core/browser/static/js/bika.lims.graphics.range.js",
-          "../src/senaite/core/browser/static/js/bika.lims.instrument.js",
-          "../src/senaite/core/browser/static/js/bika.lims.referencesample.js",
-          "../src/senaite/core/browser/static/js/bika.lims.site.js",
-          "../src/senaite/core/browser/static/js/bika.lims.utils.attachments.js",
-          "../src/senaite/core/browser/static/js/bika.lims.utils.barcode.js",
-          "../src/senaite/core/browser/static/js/bika.lims.worksheet.js",
-          "../src/senaite/core/browser/static/js/bika.lims.worksheet.print.js",
-          "../src/senaite/core/browser/static/js/bika.lims.loader.js",
+          "../src/senaite/core/browser/static/js/senaite.core.analysisrequest.js",
+          "../src/senaite/core/browser/static/js/senaite.core.bikasetup.js",
+          "../src/senaite/core/browser/static/js/senaite.core.calculation.edit.js",
+          "../src/senaite/core/browser/static/js/senaite.core.client.js",
+          "../src/senaite/core/browser/static/js/senaite.core.common.js",
+          "../src/senaite/core/browser/static/js/senaite.core.graphics.controlchart.js",
+          "../src/senaite/core/browser/static/js/senaite.core.graphics.range.js",
+          "../src/senaite/core/browser/static/js/senaite.core.instrument.js",
+          "../src/senaite/core/browser/static/js/senaite.core.loader.js",
+          "../src/senaite/core/browser/static/js/senaite.core.partitionmagic.js",
+          "../src/senaite/core/browser/static/js/senaite.core.referencesample.js",
+          "../src/senaite/core/browser/static/js/senaite.core.setupview.js",
+          "../src/senaite/core/browser/static/js/senaite.core.site.js",
+          "../src/senaite/core/browser/static/js/senaite.core.utils.attachments.js",
+          "../src/senaite/core/browser/static/js/senaite.core.utils.barcode.js",
+          "../src/senaite/core/browser/static/js/senaite.core.worksheet.js",
+          "../src/senaite/core/browser/static/js/senaite.core.worksheet.print.js",
         ],
         dest: code => {
           if (devMode) {
@@ -213,7 +213,7 @@ module.exports = {
       }, {
         // legacy.css
         src: [
-          "../src/senaite/core/browser/static/css/bika.lims.graphics.css",
+          "../src/senaite/core/browser/static/css/senaite.core.graphics.css",
         ],
         dest: code => ({
           "legacy.css":new CleanCSS({}).minify(code).styles,
@@ -221,9 +221,6 @@ module.exports = {
       }, {
         // thirdparty.js
         src: [
-          "../src/senaite/core/browser/static/thirdparty/jqueryui/jquery-ui-1.12.1.min.js",
-          "../src/senaite/core/browser/static/thirdparty/jqueryui/jquery-ui-i18n.min.js",
-          "../src/senaite/core/browser/static/thirdparty/combogrid/jquery.ui.combogrid-1.6.4.js",
           "../src/senaite/core/browser/static/thirdparty/plone/overlayhelpers.js",
           "../src/senaite/core/browser/static/thirdparty/jquery-barcode-2.2.0.min.js",
           "../src/senaite/core/browser/static/thirdparty/jquery-qrcode-0.17.0.min.js",
@@ -246,11 +243,7 @@ module.exports = {
         },
       }, {
         // thirdparty.css
-        src: [
-          "../src/senaite/core/browser/static/thirdparty/jqueryui/themes/base/jquery-ui.min.css",
-          "../src/senaite/core/browser/static/thirdparty/jqueryui/themes/base/theme.css",
-          "../src/senaite/core/browser/static/thirdparty/combogrid/jquery.ui.combogrid-1.6.4.css",
-        ],
+        src: [],
         dest: code => ({
           "thirdparty.css":new CleanCSS({}).minify(code).styles,
         })
@@ -269,17 +262,18 @@ module.exports = {
     // https://webpack.js.org/plugins/copy-webpack-plugin/
     new CopyPlugin({
       patterns: [
-        { from: "../node_modules/jquery/dist", to: path.resolve(staticPath, "modules/jquery") },
-        { from: "../node_modules/jquery-form/dist", to: path.resolve(staticPath, "modules/jquery-form") },
-        { from: "../node_modules/jquery-migrate/dist", to: path.resolve(staticPath, "modules/jquery-migrate") },
-        { from: "../node_modules/bootstrap/dist", to: path.resolve(staticPath, "modules/bootstrap") },
-        { from: "../node_modules/popper.js/dist/umd", to: path.resolve(staticPath, "modules/popperjs") },
         { from: "../node_modules/bootstrap-confirmation2/dist", to: path.resolve(staticPath, "modules/bootstrap-confirmation2") },
         { from: "../node_modules/bootstrap-select/dist", to: path.resolve(staticPath, "modules/bootstrap-select") },
-        { from: "../node_modules/react/umd/react.production.min.js", to: path.resolve(staticPath, "modules/react") },
-        { from: "../node_modules/react-dom/umd/react-dom.production.min.js", to: path.resolve(staticPath, "modules/react-dom") },
-        { from: "../node_modules/tinymce", to: path.resolve(staticPath, "modules/tinymce"), globOptions: {ignore: ["**/README.md"],},},
+        { from: "../node_modules/bootstrap/dist", to: path.resolve(staticPath, "modules/bootstrap") },
+        { from: "../node_modules/handlebars/dist", to: path.resolve(staticPath, "modules/handlebars") },
         { from: "../node_modules/intl-tel-input/build", to: path.resolve(staticPath, "modules/intl-tel-input") },
+        { from: "../node_modules/jquery-form/dist", to: path.resolve(staticPath, "modules/jquery-form") },
+        { from: "../node_modules/jquery-ui/dist", to: path.resolve(staticPath, "modules/jquery-ui") },
+        { from: "../node_modules/jquery/dist", to: path.resolve(staticPath, "modules/jquery") },
+        { from: "../node_modules/popper.js/dist/umd", to: path.resolve(staticPath, "modules/popperjs") },
+        { from: "../node_modules/react-dom/umd/react-dom.production.min.js", to: path.resolve(staticPath, "modules/react-dom") },
+        { from: "../node_modules/react/umd/react.production.min.js", to: path.resolve(staticPath, "modules/react") },
+        { from: "../node_modules/tinymce", to: path.resolve(staticPath, "modules/tinymce"), globOptions: {ignore: ["**/README.md"],},},
         // { from: "../node_modules/@fortawesome/fontawesome-free", to: path.resolve(staticPath, "modules/fontawesome-free") },
       ]
     }),
