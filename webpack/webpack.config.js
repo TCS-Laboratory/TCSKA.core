@@ -114,11 +114,6 @@ module.exports = {
     ]
   },
   optimization: {
-    splitChunks: {
-      chunks: "all",
-      name: false,
-    },
-    runtimeChunk: "single",
     minimize: isProd,
     minimizer: [
       // https://v4.webpack.js.org/plugins/terser-webpack-plugin/
@@ -191,20 +186,29 @@ module.exports = {
           "../src/senaite/core/browser/static/js/senaite.core.worksheet.print.js",
         ],
         dest: code => {
+          const joined = Array.isArray(code) ? code.join("\n") : code;
+
           if (isDev) {
-            return {
-              "legacy.js": code
-            }
+            return { "legacy.js": joined };
           }
-          const min = uglifyJS.minify(code, {sourceMap: {
-            filename: "legacy.js",
-            // url: "legacy.js.map"
-          }, compress: {drop_console: true}});
-          return {
-            "legacy.js":min.code,
-            // "legacy.js.map": min.map
+
+          const min = uglifyJS.minify(joined, {
+            compress: { drop_console: true },
+            mangle: false,
+            keep_fnames: true
+          });
+
+          if (min.error) {
+            console.error("UglifyJS error:", min.error);
+            throw min.error;
           }
-        },
+
+          if (!min.code || typeof min.code !== "string") {
+            throw new Error("UglifyJS output is empty or invalid for legacy.js");
+          }
+
+          return { "legacy.js": min.code };
+        }
       }, {
         // legacy.css
         src: [
@@ -222,20 +226,18 @@ module.exports = {
           "../src/senaite/core/browser/static/thirdparty/d3.js",
         ],
         dest: code => {
-          if (isDev) {
-            return {
-              "thirdparty.js": code
-            }
-          }
-          const min = uglifyJS.minify(code, {sourceMap: {
-            filename: "thirdparty.js",
-            // url: "thirdparty.js.map"
-          }, compress: {drop_console: true}});
-          return {
-            "thirdparty.js":min.code,
-            // "thirdparty.js.map": min.map
-          }
-        },
+          // no minifying of already minified code
+          const joined = Array.isArray(code) ? code.join("\n") : code;
+          return { "thirdparty.js": joined };
+        }
+      }, {
+        // legacy.css
+        src: [
+          "../src/senaite/core/browser/static/css/senaite.core.graphics.css",
+        ],
+        dest: code => ({
+          "legacy.css":new CleanCSS({}).minify(code).styles,
+        })
       }, {
         // thirdparty.css
         src: [],
@@ -266,8 +268,6 @@ module.exports = {
         { from: "../node_modules/jquery-ui/dist", to: path.resolve(staticPath, "modules/jquery-ui") },
         { from: "../node_modules/jquery/dist", to: path.resolve(staticPath, "modules/jquery") },
         { from: "../node_modules/popper.js/dist/umd", to: path.resolve(staticPath, "modules/popperjs") },
-        { from: "../node_modules/react-dom/umd/react-dom.production.min.js", to: path.resolve(staticPath, "modules/react-dom") },
-        { from: "../node_modules/react/umd/react.production.min.js", to: path.resolve(staticPath, "modules/react") },
         { from: "../node_modules/tinymce", to: path.resolve(staticPath, "modules/tinymce"), globOptions: {ignore: ["**/README.md"],},},
         // { from: "../node_modules/@fortawesome/fontawesome-free", to: path.resolve(staticPath, "modules/fontawesome-free") },
       ]
@@ -282,8 +282,6 @@ module.exports = {
   ],
   externals: {
     // https://webpack.js.org/configuration/externals
-    react: "React",
-    "react-dom": "ReactDOM",
     $: "jQuery",
     jquery: "jQuery",
     bootstrap: "bootstrap",
