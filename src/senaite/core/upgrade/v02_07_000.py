@@ -24,6 +24,9 @@ from bika.lims.interfaces import IInvalidated
 from senaite.core import logger
 from senaite.core.catalog import SAMPLE_CATALOG
 from senaite.core.config import PROJECTNAME as product
+from senaite.core.interfaces.catalog import ISenaiteCatalogObject
+from senaite.core.setuphandlers import add_catalog_column
+from senaite.core.setuphandlers import add_catalog_index
 from senaite.core.upgrade import upgradestep
 from senaite.core.upgrade.utils import UpgradeUtils
 from zope.interface import alsoProvides
@@ -92,3 +95,26 @@ def mark_invalidated_samples(tool):
         sample._p_deactivate()
 
     logger.info("Mark invalidated samples as IInvalidated [DONE]")
+
+
+@upgradestep(product, version)
+def upgrade_catalog_modified_index(tool):
+    """Update modified index in catalog
+    """
+    logger.info("Upgrade catalog modified index ...")
+    portal = api.get_portal()
+
+    # Get all catalogs that implement ISenaiteCatalogObject
+    objects = portal.objectValues()
+    cats = [cat for cat in objects if ISenaiteCatalogObject.providedBy(cat)]
+
+    # Add the `modified` index and metadata
+    for cat in cats:
+        add_catalog_index(cat, "modified", "", "DateIndex")
+        add_catalog_column(cat, "modified")
+
+    logger.info("Upgrade catalog modified index [DONE]")
+    logger.warn(
+        "You may need to manually reindex the 'modified' index in existing "
+        "catalogs as required."
+    )
