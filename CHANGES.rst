@@ -4,6 +4,7 @@ Changelog
 2.7.0 (unreleased)
 ------------------
 
+- #2761 Fix AT decimal widget allows commas
 - #2760 Fix UnicodeDecodeError in instrument importer when processing field values
 - #2759 Fix UnicodeDecodeError on Specification Validation
 - #2758 Fix global auditlog error for objects without snapshots
