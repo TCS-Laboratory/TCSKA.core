@@ -422,31 +422,6 @@ class window.AnalysisRequestAdd
       $.each record.template_metadata, (uid, template) ->
         me.set_template arnum, template
 
-      # handle unmet dependencies, one at a time
-      $.each record.unmet_dependencies, (uid, dependencies) ->
-        service = record.service_metadata[uid]
-
-        context =
-          "service": service
-          "dependencies": dependencies
-
-        dialog = me.template_dialog "dependency-add-template", context
-
-        dialog.on "yes", ->
-          # select the services
-          $.each dependencies, (index, service) ->
-            me.set_service arnum, service.uid, yes
-          # trigger form:changed event
-          $(me).trigger "form:changed"
-        dialog.on "no", ->
-          # deselect the dependant service
-          me.set_service arnum, uid, no
-          # trigger form:changed event
-          $(me).trigger "form:changed"
-
-        # break the iteration after the first loop to avoid multiple dialogs.
-        return false
-
       # disable (and uncheck) services that are beyond sample holding time
       $.each record.beyond_holding_time, (index, uid) ->
         # display the alert
@@ -480,10 +455,7 @@ class window.AnalysisRequestAdd
    * @returns {String} Base URL for Ajax Request
   ###
   get_base_url: =>
-    base_url = window.location.href
-    if base_url.search("/portal_factory") >= 0
-      return base_url.split("/portal_factory")[0]
-    return base_url.split("/ar_add")[0]
+    return document.body.dataset.baseUrl
 
 
   ###*
@@ -1543,7 +1515,7 @@ class window.AnalysisRequestAdd
       OK: ->
         $(@).dialog "destroy"
 
-    dialog = @template_dialog "service-dependant-template", context, buttons
+    dialog = @template_dialog "service-dependent-template", context, buttons
 
 
   ###*
