@@ -402,6 +402,13 @@ class AnalysisRequestAddView(BrowserView):
                     # get the default value of this field
                     value = self.get_default_value(
                         field, ar_context, arnum=arnum)
+
+                # Filter out analyses in certain workflow states when copying
+                if fieldname == "Analyses" and value:
+                    skip_states = self.get_skip_analyses_states()
+                    value = self.filter_objs_with_states(
+                        value, filter_states=skip_states)
+
                 # store the value on the new fieldname
                 new_fieldname = self.get_fieldname(field, arnum)
                 out[new_fieldname] = value
@@ -599,7 +606,6 @@ class AnalysisRequestAddView(BrowserView):
             widget_type = None
         return widget_type in ALLOW_MULTI_PASTE_WIDGET_TYPES
 
-    @viewcache.memoize
     def get_allowed_multi_paste_fields(self):
         """Returns a list of fields that allow multi paste
         """
@@ -607,7 +613,36 @@ class AnalysisRequestAddView(BrowserView):
         record = get_registry_record(key)
         if not record:
             return []
-        return record
+        # convert to plain list to avoid persistent references
+        return list(record)
+
+    def get_skip_analyses_states(self):
+        """Returns a list of analyses WF states to skip on copy
+        """
+        key = "sample_add_form_skip_analyses_in_states"
+        record = get_registry_record(key)
+        if not record:
+            return []
+        # convert to plain list to avoid persistent references
+        return list(record)
+
+    def filter_objs_with_states(self, objs, filter_states=None):
+        """Filter out objects that are in the given workflow states
+
+        :param objs: List of objects to filter
+        :param filter_states: List of workflow state IDs to exclude
+        :return: List of objects not in the filter_states
+        """
+        if not filter_states:
+            return objs
+        if not isinstance(filter_states, (list, tuple)):
+            return objs
+        filtered = []
+        for obj in objs:
+            status = api.get_review_status(obj)
+            if status not in filter_states:
+                filtered.append(obj)
+        return filtered
 
 
 class AnalysisRequestManageView(BrowserView):

@@ -4,6 +4,7 @@ Changelog
 2.7.0 (unreleased)
 ------------------
 
+- #2803 Allow to skip analyses in WF states on copy
 - #2802 Fix KeyError in DX address widget country lookup
 - #2800 Fix WrongContainedType on object creation/update via jsonapi
 - #2799 Fix Reference Sample import supplier data
