@@ -2023,7 +2023,7 @@ class Worksheet_Templates(WorksheetImporter):
                     "pos": int(row["pos"]),
                     "type": analysis_type[0].lower(), # if 'type' is full word
                     "blank_ref": [blank_uid] if blank_uid else [],
-                    "control_ref": [control_uid] if blank_uid else [],
+                    "control_ref": [control_uid] if control_uid else [],
                     "reference_proxy": ref_proxy,
                     "dup": dup,
                     "dup_proxy": dup,
@@ -2276,8 +2276,8 @@ class Reference_Samples(WorksheetImporter):
         for row in self.get_rows(3):
             if not row['id']:
                 continue
-            supplier = bsc(portal_type='Supplier',
-                           getName=row.get('Supplier_title', ''))[0].getObject()
+            supplier = self.get_object(bsc, 'Supplier',
+                                       row.get('Supplier_title', ''))
             obj = _createObjectByType("ReferenceSample", supplier, row['id'])
             ref_def = self.get_object(bsc, 'ReferenceDefinition',
                                       row.get('ReferenceDefinition_title'))

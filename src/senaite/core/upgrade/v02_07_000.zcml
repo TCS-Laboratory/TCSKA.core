@@ -3,6 +3,46 @@
     xmlns:genericsetup="http://namespaces.zope.org/genericsetup">
 
   <genericsetup:upgradeStep
+      title="SENAITE.CORE 2.7.0: Add registry key to copy sample structure with partitions"
+      description="Allows to copy the entire sample structure including partitions when copying a sample"
+      source="2709"
+      destination="2710"
+      handler=".v02_07_000.import_registry"
+      profile="senaite.core:default"/>
+
+  <genericsetup:upgradeStep
+      title="SENAITE.CORE 2.7.0: Add registry key to skip partition analyses on copy"
+      description="Allows to skip analyses from partitions when copying a sample"
+      source="2708"
+      destination="2709"
+      handler=".v02_07_000.import_registry"
+      profile="senaite.core:default"/>
+
+  <genericsetup:upgradeStep
+      title="SENAITE.CORE 2.7.0: Add registry key to skip analyses in defined WF states"
+      description="Allows to define WF states for Analyses to skip for new copies, e.g. rejected etc."
+      source="2707"
+      destination="2708"
+      handler=".v02_07_000.import_registry"
+      profile="senaite.core:default"/>
+
+  <genericsetup:upgradeStep
+      title="SENAITE.CORE 2.7.0: Add registry key for trigger events on sample creation"
+      description="Allows to define if after and before events have to be triggered on sample creation"
+      source="2706"
+      destination="2707"
+      handler=".v02_07_000.import_registry"
+      profile="senaite.core:default"/>
+
+  <genericsetup:upgradeStep
+      title="SENAITE.CORE 2.7.0: Add registry key for instrument import submit handling"
+      description="Allow to submit imported analysis manually"
+      source="2705"
+      destination="2706"
+      handler=".v02_07_000.import_registry"
+      profile="senaite.core:default"/>
+
+  <genericsetup:upgradeStep
       title="SENAITE.CORE 2.7.0: Update analysis catalog indexes"
       description="Add boolean 'has_calculation' index to analysis catalog"
       source="2704"
