@@ -39,6 +39,39 @@ for enterprise environments, especially focused to behave with excellent
 performance and stability.
 
 
+TCSKA fork additions
+====================
+
+This is the TCS-Laboratory fork (``TCS-Laboratory/TCSKA.core``). On top of
+upstream ``senaite.core``, the ``X.0.2.9_aichat`` branch adds:
+
+* **ATLAS chatbot** — a floating Gemini-backed assistant viewlet that grounds
+  every reply in the live Zope catalog. Renders bottom-right on every SENAITE
+  page; exposes a JSON endpoint at ``@@aichat-query``.
+* **ADYPU header logo** — the default SENAITE site logo
+  (``src/senaite/core/browser/static/images/senaite-site-logo.png``) is
+  replaced with the ADYPU brand image.
+
+See the package-level guide for setup, configuration, and the JSON shape:
+``src/senaite/core/browser/aichat/README.md``.
+
+**Quick start** (assuming you build via the matching ``TCSKA.docker`` image):
+
+.. code-block:: bash
+
+    git clone -b X.0.2.9_aichat https://github.com/TCS-Laboratory/TCSKA.docker.git
+    cd TCSKA.docker/X.0.2.9
+    docker build -t tcska:X.0.2.9 .
+    docker run -d --name tcska -p 8080:8080 \\
+        -e GEMINI_API_KEY=AIzaSy....your-key.... \\
+        tcska:X.0.2.9
+
+The ``GEMINI_API_KEY`` env var is optional — without it ATLAS still renders
+and returns live catalog counts; with it, replies use Gemini 2.5 Flash.
+Never commit the key to source control. Get a free key at
+https://aistudio.google.com/app/apikey.
+
+
 Installation
 ============
 
