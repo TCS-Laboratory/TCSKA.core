@@ -12,6 +12,7 @@
       name="senaite.core.static"/>
 
   <!-- Package includes -->
+  <include package=".aichat"/>
   <include package=".attachment"/>
   <include package=".batches"/>
   <include package=".batching"/>

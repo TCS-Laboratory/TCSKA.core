@@ -1,0 +1,123 @@
+<div id="senaite-aichat-root"
+     tal:attributes="data-endpoint view/endpoint">
+  <style>
+    #senaite-aichat-toggle {
+      position: fixed; right: 18px; bottom: 18px; z-index: 9999;
+      width: 56px; height: 56px; border-radius: 50%;
+      background: #2a6fa3; color: #fff; border: 0;
+      box-shadow: 0 4px 12px rgba(0,0,0,.25); cursor: pointer;
+      font-size: 26px; line-height: 56px; padding: 0;
+    }
+    #senaite-aichat-panel {
+      position: fixed; right: 18px; bottom: 88px; z-index: 9999;
+      width: 340px; max-height: 480px;
+      background: #fff; border: 1px solid #d0d7de; border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.2);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      flex-direction: column;
+    }
+    #senaite-aichat-panel[hidden] { display: none; }
+    #senaite-aichat-panel:not([hidden]) { display: flex; }
+    #senaite-aichat-panel header {
+      background: #2a6fa3; color: #fff;
+      padding: 8px 12px; border-radius: 8px 8px 0 0;
+      font-weight: 600; font-size: 14px;
+    }
+    #senaite-aichat-log {
+      flex: 1; overflow-y: auto; padding: 10px;
+      font-size: 13px; line-height: 1.4; min-height: 200px;
+    }
+    #senaite-aichat-log .row { margin-bottom: 8px; }
+    #senaite-aichat-log .row.user { text-align: right; }
+    #senaite-aichat-log .bubble {
+      display: inline-block; padding: 6px 10px; border-radius: 10px; max-width: 85%;
+      white-space: pre-wrap; word-wrap: break-word;
+    }
+    #senaite-aichat-log .user .bubble { background: #e6f0fa; }
+    #senaite-aichat-log .bot  .bubble { background: #f3f4f6; }
+    #senaite-aichat-input-row {
+      display: flex; border-top: 1px solid #e5e7eb; padding: 6px;
+    }
+    #senaite-aichat-input {
+      flex: 1; border: 1px solid #d0d7de; border-radius: 4px;
+      padding: 6px 8px; font-size: 13px; margin-right: 6px;
+    }
+    #senaite-aichat-send {
+      background: #2a6fa3; color: #fff; border: 0;
+      padding: 0 12px; border-radius: 4px; cursor: pointer;
+      font-size: 13px;
+    }
+  </style>
+
+  <button id="senaite-aichat-toggle" type="button" title="ATLAS">&#9788;</button>
+
+  <section id="senaite-aichat-panel" hidden="hidden">
+    <header>ATLAS</header>
+    <div id="senaite-aichat-log"></div>
+    <div id="senaite-aichat-input-row">
+      <input id="senaite-aichat-input" type="text" placeholder="Ask ATLAS about samples, clients..." />
+      <button id="senaite-aichat-send" type="button">Send</button>
+    </div>
+  </section>
+
+  <script>
+  (function () {
+    var root  = document.getElementById('senaite-aichat-root');
+    var btn   = document.getElementById('senaite-aichat-toggle');
+    var panel = document.getElementById('senaite-aichat-panel');
+    var input = document.getElementById('senaite-aichat-input');
+    var send  = document.getElementById('senaite-aichat-send');
+    var log   = document.getElementById('senaite-aichat-log');
+    var url   = root.getAttribute('data-endpoint');
+
+    function bubble(role, text) {
+      var row = document.createElement('div');
+      row.className = 'row ' + role;
+      var b = document.createElement('span');
+      b.className = 'bubble';
+      b.textContent = text;
+      row.appendChild(b);
+      log.appendChild(row);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    btn.addEventListener('click', function () {
+      if (panel.hasAttribute('hidden')) {
+        panel.removeAttribute('hidden');
+        input.focus();
+      } else {
+        panel.setAttribute('hidden', 'hidden');
+      }
+    });
+
+    function dispatch() {
+      var msg = (input.value || '').trim();
+      if (!msg) return;
+      bubble('user', msg);
+      input.value = '';
+      input.disabled = true; send.disabled = true;
+      fetch(url + '?message=' + encodeURIComponent(msg), {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {'Accept': 'application/json'}
+      }).then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data && data.ok) {
+            bubble('bot', data.reply || '(empty)');
+          } else {
+            bubble('bot', '[error] ' + (data && data.error || 'unknown'));
+          }
+        })
+        .catch(function (e) { bubble('bot', '[network] ' + e); })
+        .then(function () {
+          input.disabled = false; send.disabled = false; input.focus();
+        });
+    }
+
+    send.addEventListener('click', dispatch);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); dispatch(); }
+    });
+  })();
+  </script>
+</div>

@@ -1,0 +1,21 @@
+<configure xmlns="http://namespaces.zope.org/zope"
+           xmlns:browser="http://namespaces.zope.org/browser"
+           i18n_domain="senaite.core">
+
+  <!-- Floating AI chatbot widget shown in the portal footer -->
+  <browser:viewlet
+      name="senaite.core.aichat"
+      manager="plone.app.layout.viewlets.interfaces.IPortalFooter"
+      class=".viewlet.AIChatViewlet"
+      permission="zope2.View"
+      />
+
+  <!-- AJAX endpoint: GET /@@aichat-query?message=... -->
+  <browser:page
+      for="*"
+      name="aichat-query"
+      class=".view.AIChatQueryView"
+      permission="zope2.View"
+      />
+
+</configure>
