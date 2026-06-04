@@ -140,6 +140,25 @@ def _call(obj, name):
         return None
 
 
+def _to_text(value):
+    """Coerce any value to clean unicode, recovering from mixed
+    utf-8/latin-1 byte strings (SENAITE units like 'mm\xc2\xb2')."""
+    if isinstance(value, bytes):  # py2 str
+        for enc in ("utf-8", "latin-1"):
+            try:
+                return value.decode(enc)
+            except Exception:
+                continue
+        return value.decode("utf-8", "replace")
+    try:
+        return unicode(value)  # noqa: F821 (py2)
+    except Exception:
+        try:
+            return str(value).decode("utf-8", "replace")
+        except Exception:
+            return u""
+
+
 def _serialize_value(value):
     if callable(value):
         try:
@@ -148,15 +167,8 @@ def _serialize_value(value):
             return None
     if value is None or value == "":
         return None
-    try:
-        s = str(value)
-    except Exception:
-        try:
-            s = value.encode("utf-8")
-        except Exception:
-            return None
-    s = s.strip()
-    if not s or s.startswith("<bound method") or s.startswith("<"):
+    s = _to_text(value).strip()
+    if not s or s.startswith(u"<bound method") or s.startswith(u"<"):
         return None
     return s[:300]
 
@@ -270,7 +282,7 @@ def _analysis_summary(obj, limit=40):
     for an in (analyses or [])[:limit]:
         try:
             title = _serialize_value(getattr(an, "Title", None)) \
-                or _call(an, "getKeyword") or "Analysis"
+                or _to_text(_call(an, "getKeyword") or "Analysis")
             result = _call(an, "getFormattedResult") or _call(an, "getResult")
             unit = _call(an, "getUnit") or ""
             oor = False
@@ -281,9 +293,9 @@ def _analysis_summary(obj, limit=40):
                 oor = False
             state = friendly_state(_call(an, "review_state")
                                    or _call(an, "getReviewState"))
-            result_s = "" if result in (None, "") else str(result)
-            row = "%s = %s %s" % (title, result_s, unit)
-            row = row.strip()
+            result_s = u"" if result in (None, "") else _to_text(result)
+            row = (u"%s = %s %s" % (_to_text(title), result_s,
+                                    _to_text(unit))).strip()
             if state:
                 row += " [%s]" % state
             if oor:
@@ -366,9 +378,11 @@ def enrich_hits(context, hits, max_objs=6):
 
 # Tokens that look like SENAITE IDs, e.g. TMT8-0009, WS-0003, B-0007, AR-0001.
 _ID_RE = re.compile(r"[A-Za-z]{1,8}\d[A-Za-z0-9]*(?:-[A-Za-z0-9]+)*")
-# Pure record-number tail, e.g. "0009".
-_NUM_RE = re.compile(r"\b\d{3,}\b")
-_ID_INDEXES = ("getId", "id", "getRequestID", "getClientSampleID")
+# Indexes that identify the record ITSELF. Deliberately excludes
+# getRequestID: on Analysis objects that index equals the parent sample's
+# ID, so including it would flood the results with a sample's child
+# analyses and push the sample record itself off the list.
+_ID_INDEXES = ("getId", "id", "getClientSampleID")
 
 
 def _id_tokens(query):
@@ -377,8 +391,6 @@ def _id_tokens(query):
         if any(c.isdigit() for c in m) and len(m) >= 3:
             tokens.add(m)
             tokens.add(m.upper())
-    for m in _NUM_RE.findall(query or ""):
-        tokens.add(m)
     return list(tokens)
 
 
@@ -417,8 +429,12 @@ def search_catalog(context, query, limit=10):
         else:
             hits.append(rec)
 
-    # 0) EXACT-ID lookup -- highest priority, inserted at the front.
-    for token in _id_tokens(query):
+    # 0) EXACT-ID lookup -- the record whose own id matches the token.
+    tokens = _id_tokens(query)
+    tokens_up = set(t.upper() for t in tokens)
+    primary = []
+    prim_seen = set()
+    for token in tokens:
         for cat in cats:
             for index in _ID_INDEXES:
                 try:
@@ -426,7 +442,23 @@ def search_catalog(context, query, limit=10):
                 except Exception:
                     continue
                 for b in brains[:5]:
-                    push(b, front=True)
+                    try:
+                        p = b.getPath()
+                    except Exception:
+                        continue
+                    if p in prim_seen:
+                        continue
+                    prim_seen.add(p)
+                    primary.append(b)
+
+    # An exact title/id match (the sample itself) ranks before anything
+    # else that happened to match, so it is never truncated away.
+    def _rank(b):
+        t = getattr(b, "Title", "") or getattr(b, "id", "") or ""
+        return 0 if str(t).upper() in tokens_up else 1
+    primary.sort(key=_rank)
+    for b in primary:
+        push(b)
 
     # 1) keyword -> portal_type listing
     KEYWORDS = {
@@ -490,12 +522,12 @@ def search_catalog(context, query, limit=10):
 def _format_context(summary, context_hits):
     summary_lines = []
     for k, v in (summary or {}).items():
-        summary_lines.append("  - {label}: {n}".format(label=k, n=v))
+        summary_lines.append(u"  - {label}: {n}".format(label=k, n=v))
 
     hit_lines = []
     for hit in (context_hits or []):
         hit_lines.append(
-            "  - {title} (type={type}, path={path})".format(
+            u"  - {title} (type={type}, path={path})".format(
                 title=hit.get("title"),
                 type=hit.get("portal_type"),
                 path=hit.get("path"),
@@ -503,7 +535,7 @@ def _format_context(summary, context_hits):
         )
         details = hit.get("details") or {}
         for k, v in details.items():
-            hit_lines.append("      {k}: {v}".format(k=k, v=v))
+            hit_lines.append(u"      {k}: {v}".format(k=k, v=v))
     return summary_lines, hit_lines
 
 
