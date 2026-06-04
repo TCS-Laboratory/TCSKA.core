@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Gemini REST client + Zope portal_catalog query helpers.
+"""Gemini REST client + Zope catalog query helpers for ATLAS.
 
-Python 2.7 compatible (uses urllib2). Returns a clear placeholder when
-GEMINI_API_KEY is unset, so the rest of the chatbot wiring works
-end-to-end without a live key.
+Python 2.7 compatible (uses urllib2). Returns a clear data-grounded
+fallback when GEMINI_API_KEY is unset OR when Gemini is unreachable, so
+the user always gets the catalog facts even if the LLM is down.
 """
 import json
 import os
+import re
+import time
+from collections import OrderedDict
 
 from Products.CMFCore.utils import getToolByName
 
@@ -21,6 +24,10 @@ GEMINI_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "gemini-2.5-flash:generateContent"
 )
+
+# Transient HTTP codes worth retrying.
+_RETRY_CODES = (429, 500, 502, 503, 504)
+
 
 # Portal types ATLAS always reports counts for. Missing types simply
 # yield 0 and are dropped from the prompt.
@@ -57,6 +64,37 @@ CATALOG_NAMES = [
 ]
 
 
+# Human-friendly labels for SENAITE workflow states. Used so ATLAS can
+# answer "is it pending or approved" without the user knowing SENAITE
+# internals.
+STATE_LABELS = {
+    "to_be_sampled":       "To be sampled",
+    "scheduled_sampling":  "Scheduled for sampling",
+    "sample_due":          "Sample due (awaiting reception)",
+    "sample_received":     "Sample received - in progress",
+    "to_be_preserved":     "To be preserved",
+    "to_be_verified":      "To be verified (PENDING approval)",
+    "verified":            "Verified (APPROVED)",
+    "published":           "Published (APPROVED & released)",
+    "invalid":             "Invalid",
+    "rejected":            "Rejected",
+    "cancelled":           "Cancelled",
+    "dispatched":          "Dispatched",
+    "stored":              "Stored",
+    "active":              "Active",
+    "inactive":            "Inactive",
+    "registered":          "Registered",
+    "assigned":            "Assigned to worksheet",
+    "unassigned":          "Unassigned",
+}
+
+
+def friendly_state(state):
+    if not state:
+        return None
+    return STATE_LABELS.get(state, state.replace("_", " ").capitalize())
+
+
 def _catalogs(context):
     out = []
     for name in CATALOG_NAMES:
@@ -81,30 +119,25 @@ def _count_in_catalogs(cats, portal_type):
 def site_summary(context):
     """Return counts of common SENAITE types across all catalogs."""
     cats = _catalogs(context)
-    out = {}
+    out = OrderedDict()
     for label, ptype in SUMMARY_TYPES:
         out[label] = _count_in_catalogs(cats, ptype)
     return out
 
 
-# Common SENAITE field accessors. Many are methods; we call if callable.
-# Order matters for the prompt's readability.
-DETAIL_ATTRS = [
-    "Title", "Description",
-    "getName", "getEmailAddress", "getPhone", "getFax", "getMobilePhone",
-    "getClientID", "getTaxNumber", "getBankCode", "getBankAccount",
-    "getCountry", "getCity", "getProvince", "getPostalCode", "getAddress",
-    "getAccountType", "getAccountName", "getAccountNumber",
-    "ClientType", "getClientType",
-    # Sample-related
-    "getRequestID", "getDateSampled", "getDateReceived",
-    "getDatePublished", "getDateVerified",
-    "getSampleTypeTitle", "getSampleTypeUID",
-    "getClientTitle", "getContactFullName",
-    "getCCEmails", "getCCNames",
-    "getRemarks", "getPriority",
-    "review_state",
-]
+# ---------------------------------------------------------------------------
+# Value serialization
+# ---------------------------------------------------------------------------
+
+def _call(obj, name):
+    """getattr + call-if-callable, swallowing errors. Returns raw value."""
+    try:
+        v = getattr(obj, name, None)
+        if callable(v):
+            v = v()
+        return v
+    except Exception:
+        return None
 
 
 def _serialize_value(value):
@@ -118,16 +151,40 @@ def _serialize_value(value):
     try:
         s = str(value)
     except Exception:
-        return None
+        try:
+            s = value.encode("utf-8")
+        except Exception:
+            return None
     s = s.strip()
-    if not s or s.startswith("<bound method"):
+    if not s or s.startswith("<bound method") or s.startswith("<"):
         return None
-    return s[:200]
+    return s[:300]
+
+
+# Curated, logically ordered accessors. Remarks/Progress/Status/Creator are
+# handled specially in enrich_hits, so they are intentionally not here.
+DETAIL_ATTRS = [
+    "Title", "Description",
+    # Identity / sample
+    "getRequestID", "getClientSampleID", "getClientOrderNumber",
+    "getClientReference",
+    # Client / contact
+    "getName", "getClientID", "getClientTitle",
+    "getContactFullName", "getEmailAddress", "getPhone", "getMobilePhone",
+    "getTaxNumber",
+    # Sample meta
+    "getSampleTypeTitle", "getSamplePointTitle",
+    "getDateSampled", "getDateReceived", "getDatePublished",
+    "getDateVerified", "getSamplingDate",
+    "getPriority",
+    # Address-ish
+    "getCountry", "getCity", "getProvince", "getPostalCode",
+]
 
 
 def object_details(obj):
-    """Pull a clean dict of common SENAITE fields from a content object."""
-    out = {}
+    """Pull a clean ordered dict of common SENAITE fields."""
+    out = OrderedDict()
     for name in DETAIL_ATTRS:
         try:
             v = _serialize_value(getattr(obj, name, None))
@@ -138,31 +195,200 @@ def object_details(obj):
     return out
 
 
-def enrich_hits(context, hits, max_objs=5):
+def _creator_name(obj):
+    """Resolve the full name of whoever created the object."""
+    uid = _call(obj, "Creator")
+    if not uid:
+        return None
+    uid = str(uid)
+    try:
+        mt = getToolByName(obj, "portal_membership", None)
+        member = mt.getMemberById(uid) if mt else None
+        if member is not None:
+            full = member.getProperty("fullname", "") or ""
+            if full:
+                return "%s (%s)" % (full, uid)
+    except Exception:
+        pass
+    return uid
+
+
+def _fmt_date(value):
+    if value is None:
+        return None
+    try:
+        s = str(value)
+    except Exception:
+        return None
+    return s[:19]
+
+
+def _extract_remarks(obj):
+    """SENAITE 2.x stores remarks as a list of records. Older content
+    stores a plain string. Return a readable, dated transcript."""
+    raw = _call(obj, "getRemarks")
+    if not raw:
+        return None
+    # New-style Remarks object exposing .records
+    records = getattr(raw, "records", None)
+    if records:
+        lines = []
+        for rec in records:
+            try:
+                who = rec.get("user_name") or rec.get("user_id") or "?"
+                when = _fmt_date(rec.get("created")) or ""
+                content = (rec.get("content") or "").strip()
+                if content:
+                    lines.append("[%s %s] %s" % (when, who, content))
+            except Exception:
+                continue
+        if lines:
+            return " || ".join(lines)
+    # Fallback: plain string / unicode
+    try:
+        s = unicode(raw).strip()  # noqa: F821 (py2)
+    except Exception:
+        s = str(raw).strip()
+    return s[:600] or None
+
+
+def _analysis_summary(obj, limit=40):
+    """For a sample, list its analyses and flag out-of-range anomalies.
+    Returns (rows, anomalies) or None when the object has no analyses."""
+    getter = getattr(obj, "getAnalyses", None)
+    if not callable(getter):
+        return None
+    try:
+        analyses = getter(full_objects=True)
+    except Exception:
+        try:
+            analyses = getter()
+        except Exception:
+            return None
+    rows = []
+    anomalies = []
+    for an in (analyses or [])[:limit]:
+        try:
+            title = _serialize_value(getattr(an, "Title", None)) \
+                or _call(an, "getKeyword") or "Analysis"
+            result = _call(an, "getFormattedResult") or _call(an, "getResult")
+            unit = _call(an, "getUnit") or ""
+            oor = False
+            try:
+                flag = an.isOutOfRange()
+                oor = bool(flag[0]) if isinstance(flag, (list, tuple)) else bool(flag)
+            except Exception:
+                oor = False
+            state = friendly_state(_call(an, "review_state")
+                                   or _call(an, "getReviewState"))
+            result_s = "" if result in (None, "") else str(result)
+            row = "%s = %s %s" % (title, result_s, unit)
+            row = row.strip()
+            if state:
+                row += " [%s]" % state
+            if oor:
+                row += " *** OUT OF RANGE ***"
+                anomalies.append(row)
+            # also surface per-analysis remarks as anomaly signal
+            arem = _extract_remarks(an)
+            if arem:
+                note = "%s remark: %s" % (title, arem)
+                rows.append(note)
+                anomalies.append(note)
+            rows.append(row)
+        except Exception:
+            continue
+    return rows, anomalies
+
+
+def enrich_hits(context, hits, max_objs=6):
     """For the first `max_objs` hits, fetch the object and attach a
-    `details` dict so Gemini gets real field values, not just metadata."""
+    `details` dict with real field values, status, progress, creator,
+    remarks and any out-of-range anomalies."""
     root = context.getPhysicalRoot()
     for hit in hits[:max_objs]:
         path = hit.get("path") or ""
-        # Skip portal containers that aren't real records.
         ptype = hit.get("portal_type", "")
         if ptype in ("Plone Site", "Setup"):
+            hit["details"] = OrderedDict()
             continue
         try:
             obj = root.restrictedTraverse(path.lstrip("/"))
-            hit["details"] = object_details(obj)
         except Exception:
-            hit["details"] = {}
+            hit["details"] = OrderedDict()
+            continue
+
+        details = object_details(obj)
+
+        # Status (human readable)
+        rs = hit.get("review_state") or _call(obj, "review_state")
+        fs = friendly_state(rs)
+        if fs:
+            details["Status"] = fs
+
+        # Progress %
+        prog = _call(obj, "getProgress")
+        if prog not in (None, ""):
+            try:
+                details["Progress"] = "%d%%" % int(round(float(prog)))
+            except Exception:
+                details["Progress"] = "%s%%" % prog
+
+        # Who created it and when
+        cname = _creator_name(obj)
+        if cname:
+            details["Created by"] = cname
+        cdate = _fmt_date(_call(obj, "created"))
+        if cdate:
+            details["Created on"] = cdate
+
+        # Remarks transcript
+        rem = _extract_remarks(obj)
+        if rem:
+            details["Remarks"] = rem
+
+        # Analyses + anomalies (samples only)
+        ana = _analysis_summary(obj)
+        if ana:
+            rows, anomalies = ana
+            if rows:
+                details["Analyses"] = " | ".join(rows[:25])
+            if anomalies:
+                details["Anomalies"] = " | ".join(anomalies[:25])
+
+        hit["details"] = details
     return hits
 
 
-def search_catalog(context, query, limit=10):
-    """Heuristic search across every SENAITE catalog.
+# ---------------------------------------------------------------------------
+# Search: exact-ID first, then keyword listing, then SearchableText
+# ---------------------------------------------------------------------------
 
-    1) SearchableText match on the raw query (every catalog).
-    2) If the query mentions a known type word, list that type
-       (across every catalog) so "list clients" works even when the
-       word "client" appears nowhere in the indexed text.
+# Tokens that look like SENAITE IDs, e.g. TMT8-0009, WS-0003, B-0007, AR-0001.
+_ID_RE = re.compile(r"[A-Za-z]{1,8}\d[A-Za-z0-9]*(?:-[A-Za-z0-9]+)*")
+# Pure record-number tail, e.g. "0009".
+_NUM_RE = re.compile(r"\b\d{3,}\b")
+_ID_INDEXES = ("getId", "id", "getRequestID", "getClientSampleID")
+
+
+def _id_tokens(query):
+    tokens = set()
+    for m in _ID_RE.findall(query or ""):
+        if any(c.isdigit() for c in m) and len(m) >= 3:
+            tokens.add(m)
+            tokens.add(m.upper())
+    for m in _NUM_RE.findall(query or ""):
+        tokens.add(m)
+    return list(tokens)
+
+
+def search_catalog(context, query, limit=10):
+    """Search across every SENAITE catalog.
+
+    Priority order so a named record is *always* surfaced:
+      0) exact-ID lookup on getId/id/getRequestID/getClientSampleID
+      1) keyword -> portal_type listing (e.g. "list clients")
+      2) SearchableText match
     """
     cats = _catalogs(context)
     if not cats:
@@ -171,20 +397,38 @@ def search_catalog(context, query, limit=10):
     hits = []
     seen = set()
 
-    def push(brain):
-        path = brain.getPath()
+    def push(brain, front=False):
+        try:
+            path = brain.getPath()
+        except Exception:
+            return
         if path in seen:
             return
         seen.add(path)
-        hits.append({
-            "title": getattr(brain, "Title", "") or brain.id,
+        rec = {
+            "title": getattr(brain, "Title", "") or getattr(brain, "id", ""),
             "path": path,
             "portal_type": getattr(brain, "portal_type", ""),
             "review_state": getattr(brain, "review_state", ""),
             "modified": str(getattr(brain, "modified", "") or ""),
-        })
+        }
+        if front:
+            hits.insert(0, rec)
+        else:
+            hits.append(rec)
 
-    # 1) keyword -> portal_type listing FIRST (most targeted)
+    # 0) EXACT-ID lookup -- highest priority, inserted at the front.
+    for token in _id_tokens(query):
+        for cat in cats:
+            for index in _ID_INDEXES:
+                try:
+                    brains = cat(**{index: token})
+                except Exception:
+                    continue
+                for b in brains[:5]:
+                    push(b, front=True)
+
+    # 1) keyword -> portal_type listing
     KEYWORDS = {
         "sample":     ["AnalysisRequest", "Sample"],
         "request":    ["AnalysisRequest"],
@@ -199,29 +443,29 @@ def search_catalog(context, query, limit=10):
         "service":    ["AnalysisService"],
     }
     q = (query or "").lower()
-    for word, types in KEYWORDS.items():
-        if word in q:
-            for t in types:
-                for cat in cats:
-                    brains = []
-                    try:
-                        brains = cat(portal_type=t, sort_on="modified",
-                                     sort_order="reverse",
-                                     sort_limit=limit)[:limit]
-                    except Exception:
+    if len(hits) < limit:
+        for word, types in KEYWORDS.items():
+            if word in q:
+                for t in types:
+                    for cat in cats:
                         try:
-                            brains = cat(portal_type=t)[:limit]
+                            brains = cat(portal_type=t, sort_on="modified",
+                                         sort_order="reverse",
+                                         sort_limit=limit)[:limit]
                         except Exception:
-                            continue
-                    for b in brains:
-                        push(b)
+                            try:
+                                brains = cat(portal_type=t)[:limit]
+                            except Exception:
+                                continue
+                        for b in brains:
+                            push(b)
+                            if len(hits) >= limit:
+                                break
                         if len(hits) >= limit:
                             break
                     if len(hits) >= limit:
                         break
-                if len(hits) >= limit:
-                    break
-            break
+                break
 
     # 2) SearchableText pass fills remaining slots
     if len(hits) < limit:
@@ -239,8 +483,52 @@ def search_catalog(context, query, limit=10):
     return hits[:limit]
 
 
+# ---------------------------------------------------------------------------
+# Prompt assembly + Gemini client
+# ---------------------------------------------------------------------------
+
+def _format_context(summary, context_hits):
+    summary_lines = []
+    for k, v in (summary or {}).items():
+        summary_lines.append("  - {label}: {n}".format(label=k, n=v))
+
+    hit_lines = []
+    for hit in (context_hits or []):
+        hit_lines.append(
+            "  - {title} (type={type}, path={path})".format(
+                title=hit.get("title"),
+                type=hit.get("portal_type"),
+                path=hit.get("path"),
+            )
+        )
+        details = hit.get("details") or {}
+        for k, v in details.items():
+            hit_lines.append("      {k}: {v}".format(k=k, v=v))
+    return summary_lines, hit_lines
+
+
+def _structured_reply(message, context_hits, summary, note=""):
+    """Deterministic, data-grounded answer used when Gemini is
+    unavailable. Never fabricates -- only echoes catalog facts."""
+    out = []
+    if note:
+        out.append(note)
+    rich = [h for h in (context_hits or []) if h.get("details")]
+    if rich:
+        for h in rich[:3]:
+            out.append("**%s** (%s)" % (h.get("title"), h.get("portal_type")))
+            for k, v in (h.get("details") or {}).items():
+                out.append("- %s: %s" % (k, v))
+            out.append("")
+    else:
+        out.append("Site totals:")
+        for k, v in (summary or {}).items():
+            out.append("- %s: %s" % (k, v))
+    return "\n".join(out).strip()
+
+
 class GeminiClient(object):
-    """Minimal Gemini REST client."""
+    """Minimal Gemini REST client with retry + data fallback."""
 
     def __init__(self, api_key=None, endpoint=GEMINI_ENDPOINT):
         self.api_key = (api_key or "").strip()
@@ -253,70 +541,82 @@ class GeminiClient(object):
     def has_key(self):
         return bool(self.api_key)
 
-    def chat(self, message, context_hits=None, summary=None):
-        if not self.has_key():
-            return "(GEMINI_API_KEY not configured)"
-
-        summary_lines = []
-        for k, v in (summary or {}).items():
-            summary_lines.append("  - {label}: {n}".format(label=k, n=v))
-
-        hit_lines = []
-        for hit in (context_hits or []):
-            head = (
-                "  - {title} (type={type}, state={state}, path={path})"
-            ).format(
-                title=hit.get("title"),
-                type=hit.get("portal_type"),
-                state=hit.get("review_state"),
-                path=hit.get("path"),
-            )
-            hit_lines.append(head)
-            details = hit.get("details") or {}
-            for k, v in details.items():
-                hit_lines.append("      {k}: {v}".format(k=k, v=v))
-
-        system_prompt = (
+    def _system_prompt(self, summary, context_hits):
+        summary_lines, hit_lines = _format_context(summary, context_hits)
+        return (
             "You are ATLAS, an assistant embedded in a SENAITE LIMS "
-            "instance (laboratory information management system). "
-            "Ground every answer in the live Zope catalog data given "
-            "below. When the user asks 'how many X', use the COUNTS "
-            "section. When asked to list or find items, use SEARCH "
-            "RESULTS. If neither covers the question, say so plainly "
-            "instead of guessing.\n\n"
+            "(laboratory information management system). Answer ONLY from "
+            "the live catalog data below -- never invent records, results "
+            "or names. Be concise and use short markdown (bold labels, "
+            "bullet lists).\n\n"
+            "Domain rules:\n"
+            "- Sample IDs look like TMT8-0009 / AR-0001. If asked about a "
+            "specific ID, find it in SEARCH RESULTS and report its fields.\n"
+            "- 'Status' tells you the workflow state. 'to_be_verified' "
+            "means PENDING approval; 'verified' or 'published' means "
+            "APPROVED. Answer pending/approved questions from Status.\n"
+            "- 'Progress' is the completion percentage of the sample's "
+            "analyses.\n"
+            "- 'Created by' / 'Created on' answer who registered a record "
+            "and when.\n"
+            "- 'Remarks' is the dated remark transcript. 'Anomalies' lists "
+            "out-of-range analyses. Use these to flag problems.\n"
+            "- For 'how many X' use COUNTS. If the data does not cover the "
+            "question, say so plainly.\n\n"
             "COUNTS (entire site):\n"
             + ("\n".join(summary_lines) or "  (no data)") + "\n\n"
             "SEARCH RESULTS (related to current query):\n"
             + ("\n".join(hit_lines) or "  (no matches)")
         )
 
+    def chat(self, message, context_hits=None, summary=None):
+        if not self.has_key():
+            return _structured_reply(
+                message, context_hits, summary,
+                note="(ATLAS offline mode - GEMINI_API_KEY not set. "
+                     "Showing raw catalog data.)")
+
+        system_prompt = self._system_prompt(summary, context_hits)
         payload = {
-            "contents": [{
-                "role": "user",
-                "parts": [{"text": message}],
-            }],
-            "systemInstruction": {
-                "parts": [{"text": system_prompt}],
-            },
+            "contents": [{"role": "user", "parts": [{"text": message}]}],
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "generationConfig": {"temperature": 0.2},
         }
         url = "{ep}?key={key}".format(ep=self.endpoint, key=self.api_key)
-        req = Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            resp = urlopen(req, timeout=30)
-            body = json.loads(resp.read().decode("utf-8"))
-            candidates = body.get("candidates") or []
-            if candidates:
-                parts = (candidates[0].get("content") or {}).get("parts") or []
-                texts = [p.get("text", "") for p in parts]
-                return "".join(texts).strip() or "(empty Gemini response)"
-            return "(no Gemini candidates returned)"
-        except HTTPError as exc:
-            return "(Gemini HTTP error: %s)" % exc.code
-        except URLError as exc:
-            return "(Gemini network error: %s)" % exc.reason
-        except Exception as exc:
-            return "(Gemini call failed: %s)" % exc
+        data = json.dumps(payload).encode("utf-8")
+
+        last_err = None
+        for attempt in range(3):
+            req = Request(url, data=data,
+                          headers={"Content-Type": "application/json"})
+            try:
+                resp = urlopen(req, timeout=30)
+                body = json.loads(resp.read().decode("utf-8"))
+                candidates = body.get("candidates") or []
+                if candidates:
+                    parts = (candidates[0].get("content") or {}).get("parts") or []
+                    text = "".join(p.get("text", "") for p in parts).strip()
+                    if text:
+                        return text
+                last_err = "empty response"
+            except HTTPError as exc:
+                last_err = "HTTP %s" % exc.code
+                if exc.code in _RETRY_CODES and attempt < 2:
+                    time.sleep(1.2 * (attempt + 1))
+                    continue
+                break
+            except URLError as exc:
+                last_err = "network %s" % exc.reason
+                if attempt < 2:
+                    time.sleep(1.2 * (attempt + 1))
+                    continue
+                break
+            except Exception as exc:
+                last_err = str(exc)
+                break
+
+        # Gemini failed -> still answer from the data we fetched.
+        return _structured_reply(
+            message, context_hits, summary,
+            note="(ATLAS: AI service busy [%s] - here is the catalog "
+                 "data directly.)" % last_err)

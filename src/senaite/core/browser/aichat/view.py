@@ -21,24 +21,14 @@ class AIChatQueryView(BrowserView):
         try:
             summary = site_summary(self.context)
             context_hits = search_catalog(self.context, message, limit=10)
-            context_hits = enrich_hits(self.context, context_hits, max_objs=5)
+            context_hits = enrich_hits(self.context, context_hits, max_objs=6)
 
             client = GeminiClient.from_env()
-            if not client.has_key():
-                reply = (
-                    "(ATLAS scaffold: GEMINI_API_KEY not configured. "
-                    "Site totals: {totals}. Search hits: {n}.)"
-                ).format(
-                    totals=", ".join("%s=%d" % (k, v)
-                                     for k, v in summary.items()) or "none",
-                    n=len(context_hits),
-                )
-            else:
-                reply = client.chat(
-                    message=message,
-                    context_hits=context_hits,
-                    summary=summary,
-                )
+            reply = client.chat(
+                message=message,
+                context_hits=context_hits,
+                summary=summary,
+            )
             return json.dumps({
                 "ok": True,
                 "reply": reply,

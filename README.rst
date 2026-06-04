@@ -47,7 +47,11 @@ upstream ``senaite.core``, the ``X.0.2.9_aichat`` branch adds:
 
 * **ATLAS chatbot** — a floating Gemini-backed assistant viewlet that grounds
   every reply in the live Zope catalog. Renders bottom-right on every SENAITE
-  page; exposes a JSON endpoint at ``@@aichat-query``.
+  page; exposes a JSON endpoint at ``@@aichat-query``. It does exact-ID lookups
+  (e.g. ``TMT8-0009``) and reports each record's **status** (pending/approved),
+  **progress %**, **who created it and when**, the **remarks** transcript, and
+  any **out-of-range anomalies**. Gemini calls retry on transient errors and
+  fall back to the raw catalog data so the user is never left with an error.
 * **ADYPU header logo** — the default SENAITE site logo
   (``src/senaite/core/browser/static/images/senaite-site-logo.png``) is
   replaced with the ADYPU brand image.
