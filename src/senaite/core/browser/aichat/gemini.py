@@ -78,14 +78,23 @@ STATE_LABELS = {
     "published":           "Published (APPROVED & released)",
     "invalid":             "Invalid",
     "rejected":            "Rejected",
+    "retracted":           "Retracted (result withdrawn)",
     "cancelled":           "Cancelled",
     "dispatched":          "Dispatched",
     "stored":              "Stored",
+    "sample_registered":   "Registered (awaiting sampling)",
     "active":              "Active",
     "inactive":            "Inactive",
     "registered":          "Registered",
     "assigned":            "Assigned to worksheet",
-    "unassigned":          "Unassigned",
+    "unassigned":          "Unassigned (not on a worksheet)",
+    # Worksheet workflow
+    "open":                "Open (in progress)",
+    "closed":              "Closed",
+    # Reference-sample workflow
+    "current":             "Current (in use)",
+    "expired":             "Expired",
+    "disposed":            "Disposed",
 }
 
 
@@ -416,8 +425,11 @@ def enrich_hits(context, hits, max_objs=6):
 # Search: exact-ID first, then keyword listing, then SearchableText
 # ---------------------------------------------------------------------------
 
-# Tokens that look like SENAITE IDs, e.g. TMT8-0009, WS-0003, B-0007, AR-0001.
-_ID_RE = re.compile(r"[A-Za-z]{1,8}\d[A-Za-z0-9]*(?:-[A-Za-z0-9]+)*")
+# Tokens that look like SENAITE IDs. SENAITE auto-ids are <prefix>-<number>
+# (WS-006, AR-0001, B-0007, I-0001) and sometimes the prefix itself carries a
+# digit (TMT8-0009). Match: letters, optional alphanumerics, a hyphen, then a
+# number -- precise enough to avoid false hits like "500D"/"8mm"/"Re-bend".
+_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*-\d[A-Za-z0-9-]*")
 # Indexes that identify the record ITSELF. Deliberately excludes
 # getRequestID: on Analysis objects that index equals the parent sample's
 # ID, so including it would flood the results with a sample's child
@@ -428,7 +440,8 @@ _ID_INDEXES = ("getId", "id", "getClientSampleID")
 def _id_tokens(query):
     tokens = set()
     for m in _ID_RE.findall(query or ""):
-        if any(c.isdigit() for c in m) and len(m) >= 3:
+        m = m.rstrip("-")
+        if len(m) >= 3:
             tokens.add(m)
             tokens.add(m.upper())
     return list(tokens)
