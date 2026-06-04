@@ -336,7 +336,11 @@ def _analysis_summary(obj, limit=40):
             unit = _call(an, "getUnit") or ""
             oor = False
             try:
-                flag = an.isOutOfRange()
+                # SENAITE 2.x has no Analysis.isOutOfRange() method; the
+                # check is a module function returning (out_of_range,
+                # out_of_shoulder).
+                from bika.lims.api.analysis import is_out_of_range
+                flag = is_out_of_range(an)
                 oor = bool(flag[0]) if isinstance(flag, (list, tuple)) else bool(flag)
             except Exception:
                 oor = False
