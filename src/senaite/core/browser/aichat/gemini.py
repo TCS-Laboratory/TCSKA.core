@@ -96,11 +96,31 @@ def friendly_state(state):
 
 
 def _catalogs(context):
+    """Return every ZCatalog on the site. Discovered dynamically (any tool
+    whose id contains 'catalog') so we never miss a catalog that happens to
+    hold a type -- e.g. LabContact/Contact live in a catalog that is not in
+    the hard-coded list below on migrated databases."""
     out = []
+    seen = set()
+    try:
+        portal = getToolByName(context, "portal_url").getPortalObject()
+        for oid in portal.objectIds():
+            if "catalog" in oid.lower() and oid not in seen:
+                cat = getattr(portal, oid, None)
+                if cat is not None and hasattr(cat, "__call__") \
+                        and hasattr(cat, "searchResults"):
+                    out.append(cat)
+                    seen.add(oid)
+    except Exception:
+        pass
+    # Make sure the well-known catalogs are present even if discovery missed.
     for name in CATALOG_NAMES:
+        if name in seen:
+            continue
         cat = getToolByName(context, name, None)
         if cat is not None:
             out.append(cat)
+            seen.add(name)
     return out
 
 
@@ -194,14 +214,34 @@ DETAIL_ATTRS = [
 ]
 
 
+# Human-readable labels for the raw SENAITE accessors above.
+FIELD_LABELS = {
+    "Title": "Title", "Description": "Description",
+    "getRequestID": "Sample ID", "getClientSampleID": "Client Sample ID",
+    "getClientOrderNumber": "Client Order No.",
+    "getClientReference": "Client Reference",
+    "getName": "Name", "getClientID": "Client ID",
+    "getClientTitle": "Client", "getContactFullName": "Contact",
+    "getEmailAddress": "Email", "getPhone": "Phone",
+    "getMobilePhone": "Mobile", "getTaxNumber": "Tax Number",
+    "getSampleTypeTitle": "Sample Type", "getSamplePointTitle": "Sample Point",
+    "getDateSampled": "Date Sampled", "getDateReceived": "Date Received",
+    "getDatePublished": "Date Published", "getDateVerified": "Date Verified",
+    "getSamplingDate": "Sampling Date", "getPriority": "Priority",
+    "getCountry": "Country", "getCity": "City", "getProvince": "Province",
+    "getPostalCode": "Postal Code",
+}
+
+
 def object_details(obj):
-    """Pull a clean ordered dict of common SENAITE fields."""
+    """Pull a clean ordered dict of common SENAITE fields, with
+    human-readable labels instead of raw accessor names."""
     out = OrderedDict()
     for name in DETAIL_ATTRS:
         try:
             v = _serialize_value(getattr(obj, name, None))
             if v:
-                out[name] = v
+                out[FIELD_LABELS.get(name, name)] = v
         except Exception:
             continue
     return out
@@ -516,6 +556,283 @@ def search_catalog(context, query, limit=10):
 
 
 # ---------------------------------------------------------------------------
+# SENAITE vocabulary -> portal_type, and deterministic intent answers.
+# Answering counts/lists/record-details directly from the catalog means the
+# common questions never depend on Gemini (no quota, instant, always correct).
+# ---------------------------------------------------------------------------
+
+# (portal_type, label, [synonyms]). Longest matching synonym wins, so
+# "lab contact" beats "contact" and "sample type" beats "sample".
+ENTITY_SYNONYMS = [
+    ("LabContact",      "Lab Contacts (Analysts)",
+        ["analyst", "lab contact", "labcontact", "lab staff",
+         "lab personnel", "technician"]),
+    ("AnalysisRequest", "Samples",
+        ["sample", "analysis request"]),
+    ("Client",          "Clients",
+        ["client", "customer"]),
+    ("Contact",         "Client Contacts",
+        ["client contact", "contact person", "contact"]),
+    ("Worksheet",       "Worksheets",
+        ["worksheet", "work sheet"]),
+    ("AnalysisService", "Analysis Services",
+        ["analysis service", "service", "test type"]),
+    ("AnalysisProfile", "Analysis Profiles",
+        ["analysis profile", "profile"]),
+    ("Analysis",        "Analyses",
+        ["analysis", "analyses", "test result"]),
+    ("Method",          "Methods",
+        ["method"]),
+    ("SampleType",      "Sample Types",
+        ["sample type", "sampletype"]),
+    ("SamplePoint",     "Sample Points",
+        ["sample point"]),
+    ("Batch",           "Batches",
+        ["batch"]),
+    ("Instrument",      "Instruments",
+        ["instrument"]),
+]
+
+# Types small/meaningful enough to enumerate by name in a count answer.
+NAMEABLE = set(["LabContact", "Client", "Contact", "Method", "Instrument",
+                "SampleType", "SamplePoint", "Worksheet", "Batch",
+                "AnalysisProfile"])
+
+
+def match_entities(message):
+    """All distinct entities named in the message, matched by longest
+    non-overlapping synonym so 'samples and clients' -> [Samples, Clients]
+    while 'analysis service' -> [Analysis Services] only."""
+    q = (message or "").lower()
+    cands = []
+    for ptype, label, kws in ENTITY_SYNONYMS:
+        for kw in kws:
+            start = q.find(kw)
+            if start >= 0:
+                cands.append((len(kw), start, start + len(kw), ptype, label))
+    cands.sort(reverse=True)  # longest synonym first
+    claimed = []
+    picked = []
+    used = set()
+    for _ln, s, e, ptype, label in cands:
+        if any(not (e <= cs or s >= ce) for cs, ce in claimed):
+            continue
+        claimed.append((s, e))
+        if ptype not in used:
+            used.add(ptype)
+            picked.append((s, ptype, label))
+    # Preserve the order entities appear in the question.
+    picked.sort()
+    return [(ptype, label) for _s, ptype, label in picked]
+
+
+def match_entity(message):
+    ents = match_entities(message)
+    return ents[0] if ents else None
+
+
+def detect_intent(message):
+    q = (message or "").lower()
+    if any(p in q for p in ["how many", "number of", "count of", "how much",
+                            "total number", "no. of", "no of"]) \
+            or re.search(r"\bcount\b", q):
+        return "count"
+    if any(p in q for p in ["list", "show all", "show me all", "what are",
+                            "give me all", "names of", "all the", "which "]):
+        return "list"
+    if _id_tokens(message) or any(p in q for p in [
+            "details of", "detail of", "tell me about", "information about",
+            "info on", "info about", "about sample", "show me"]):
+        return "detail"
+    return "other"
+
+
+def count_type(context, portal_type):
+    return _count_in_catalogs(_catalogs(context), portal_type)
+
+
+def list_type(context, portal_type, limit=30):
+    # List from the single catalog that holds the most of this type, so an
+    # object indexed in several catalogs is not listed multiple times.
+    cats = _catalogs(context)
+    best = None
+    best_n = -1
+    for cat in cats:
+        try:
+            n = len(cat(portal_type=portal_type))
+        except Exception:
+            continue
+        if n > best_n:
+            best_n = n
+            best = cat
+    out = []
+    if best is None or best_n <= 0:
+        return out
+    try:
+        brains = best(portal_type=portal_type, sort_on="sortable_title")
+    except Exception:
+        try:
+            brains = best(portal_type=portal_type)
+        except Exception:
+            return out
+    seen = set()
+    for b in brains:
+        key = getattr(b, "UID", None)
+        if not key:
+            try:
+                key = b.getPath()
+            except Exception:
+                key = None
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "title": _to_text(getattr(b, "Title", "") or getattr(b, "id", "")),
+            "review_state": getattr(b, "review_state", ""),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+SAMPLE_STATUS_TERMS = [
+    "pending", "approved", "received", "verified", "published", "status",
+    "due", "rejected", "cancelled", "to be verified", "in progress",
+    "awaiting", "unverified", "state",
+]
+
+
+def sample_status_breakdown(context):
+    """Group every sample by workflow state -> OrderedDict {state: [titles]}.
+    Answers 'which samples are pending / received / approved'."""
+    cats = _catalogs(context)
+    groups = OrderedDict()
+    # Prefer a catalog that actually carries review_state metadata for
+    # samples (e.g. senaite_catalog_sample); uid_catalog has the objects
+    # but no workflow-state column, which would label everything "unknown".
+    best = None
+    fallback = None
+    for cat in cats:
+        try:
+            brains = cat(portal_type="AnalysisRequest")
+        except Exception:
+            continue
+        if not brains:
+            continue
+        if fallback is None:
+            fallback = cat
+        if getattr(brains[0], "review_state", ""):
+            best = cat
+            break
+    best = best or fallback
+    if best is None:
+        return groups
+    try:
+        brains = best(portal_type="AnalysisRequest", sort_on="getId")
+    except Exception:
+        try:
+            brains = best(portal_type="AnalysisRequest")
+        except Exception:
+            return groups
+    seen = set()
+    for b in brains:
+        key = getattr(b, "UID", None)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        st = getattr(b, "review_state", "") or "unknown"
+        title = _to_text(getattr(b, "Title", "") or getattr(b, "id", ""))
+        groups.setdefault(st, []).append(title)
+    return groups
+
+
+def _format_record(hit):
+    out = [u"**%s** (%s)" % (_to_text(hit.get("title")),
+                             _to_text(hit.get("portal_type")))]
+    for k, v in (hit.get("details") or {}).items():
+        out.append(u"- **%s:** %s" % (_to_text(k), _to_text(v)))
+    return u"\n".join(out)
+
+
+def _best_detail_hit(hits, message):
+    """The hit to describe: prefer one whose title matches a named ID,
+    otherwise the first hit that actually carries enriched details. Robust
+    to ranking changes (does not assume hits[0])."""
+    toks = set(t.upper() for t in _id_tokens(message))
+    for h in hits or []:
+        if toks and _to_text(h.get("title", "")).upper() in toks \
+                and h.get("details"):
+            return h
+    for h in hits or []:
+        if h.get("details"):
+            return h
+    return None
+
+
+def deterministic_answer(context, message, summary, hits):
+    """Return (reply, intent). reply is None when no confident factual
+    answer exists (caller then falls through to Gemini)."""
+    intent = detect_intent(message)
+    ents = match_entities(message)
+    ent = ents[0] if ents else None
+
+    # DETAIL: a specific ID was named -> dump the enriched record.
+    if _id_tokens(message):
+        h = _best_detail_hit(hits, message)
+        if h:
+            return _format_record(h), "detail"
+
+    # STATUS BREAKDOWN: "which samples are pending / received / approved".
+    qlow = (message or "").lower()
+    if ent and ent[0] == "AnalysisRequest" and intent != "count" \
+            and any(t in qlow for t in SAMPLE_STATUS_TERMS):
+        groups = sample_status_breakdown(context)
+        if groups:
+            lines = []
+            for st, names in groups.items():
+                lines.append(u"**%s** (%d): %s" % (
+                    friendly_state(st) or st, len(names),
+                    u", ".join(names[:40])))
+            return u"\n\n".join(lines), "list"
+
+    if intent == "count" and ents:
+        lines = []
+        for ptype, label in ents:
+            n = count_type(context, ptype)
+            line = u"**%s:** %d" % (label, n)
+            # Enumerate names only when a single small type was asked for.
+            if len(ents) == 1 and n and n <= 20 and ptype in NAMEABLE:
+                names = [r["title"] for r in list_type(context, ptype, 20)]
+                if names:
+                    line += u"\n\n" + u"\n".join(u"- %s" % t for t in names)
+            lines.append(line)
+        return u"\n\n".join(lines), "count"
+
+    if intent == "list" and ent:
+        ptype, label = ent
+        rows = list_type(context, ptype, 30)
+        if not rows:
+            return u"No %s found." % label, "list"
+        body = u"\n".join(
+            u"- **%s**%s" % (
+                r["title"],
+                (u" — %s" % friendly_state(r["review_state"]))
+                if r.get("review_state") else u"")
+            for r in rows)
+        more = u"" if len(rows) < 30 else u"\n\n(showing first 30)"
+        return u"**%s** (%d):\n\n%s%s" % (label, len(rows), body, more), "list"
+
+    # DETAIL by name (no ID) -> describe the best enriched hit.
+    if intent == "detail":
+        h = _best_detail_hit(hits, message)
+        if h:
+            return _format_record(h), "detail"
+
+    return None, intent
+
+
+# ---------------------------------------------------------------------------
 # Prompt assembly + Gemini client
 # ---------------------------------------------------------------------------
 
@@ -601,8 +918,10 @@ class GeminiClient(object):
             + ("\n".join(hit_lines) or "  (no matches)")
         )
 
-    def chat(self, message, context_hits=None, summary=None):
+    def chat(self, message, context_hits=None, summary=None, fallback=None):
         if not self.has_key():
+            if fallback:
+                return fallback
             return _structured_reply(
                 message, context_hits, summary,
                 note="(ATLAS offline mode - GEMINI_API_KEY not set. "
@@ -647,7 +966,9 @@ class GeminiClient(object):
                 last_err = str(exc)
                 break
 
-        # Gemini failed -> still answer from the data we fetched.
+        # Gemini failed -> prefer the deterministic answer; else raw data.
+        if fallback:
+            return fallback
         return _structured_reply(
             message, context_hits, summary,
             note="(ATLAS: AI service busy [%s] - here is the catalog "

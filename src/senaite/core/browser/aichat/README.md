@@ -22,17 +22,37 @@
   - **Created by / Created on** — the creator's full name (resolved via `portal_membership`) and timestamp.
   - **Remarks** — the full dated remark transcript (handles the SENAITE 2.x record-list format *and* legacy plain strings).
   - **Anomalies** — scans the sample's analyses and flags any **out-of-range** results plus per-analysis remarks.
-- **Resilient replies** — Gemini calls retry 3× with backoff on transient errors (429/500/502/503/504). If the API is still unreachable (or `GEMINI_API_KEY` is unset), ATLAS returns the **raw catalog facts** it already gathered instead of an error string — it never leaves the user empty-handed.
+- **Deterministic answers (no quota dependency)** — counts, lists and
+  single-record details are answered **directly from the catalog**, without
+  calling Gemini at all. This makes the common questions instant, always
+  correct, and immune to Gemini rate limits (free-tier `429`s). Gemini is
+  only used to phrase genuinely free-form questions, and even then the
+  deterministic answer is its fallback — a `429` never produces a junk dump.
+- **SENAITE vocabulary mapping** — natural words map to portal types:
+  `analyst`/`lab contact` → `LabContact`, `service` → `AnalysisService`,
+  `customer` → `Client`, `sample type` → `SampleType`, etc. Multi-entity
+  questions ("how many samples *and* clients") are split and answered each.
+- **Status breakdown** — "which samples are pending / received / approved"
+  groups every sample by workflow state.
+- **Dynamic catalog discovery** — probes *every* ZCatalog on the site (found
+  by scanning for tools whose id contains `catalog`), so types that live in a
+  non-obvious catalog on migrated DBs (e.g. `LabContact`, `Contact`) are still
+  counted and listed correctly.
+- **Resilient replies** — Gemini calls retry 3× with backoff on transient
+  errors (429/500/502/503/504), then fall back to the deterministic answer.
 - **No CSRF surface** — read-only `GET`, so `plone.protect` is bypassed entirely.
 
-## What ATLAS can answer
+## What ATLAS can answer (all grounded, most without Gemini)
 
-- "How many samples / clients / worksheets do I have?"
-- "Tell me about sample TMT8-0009" → full field dump.
+- "How many **analysts** do I have?" → counts `LabContact` + lists their names.
+- "How many samples **and** clients?" → multi-entity counts.
+- "List the analysts / sample types / worksheets" → enumerated.
+- "Tell me about sample TMT8-0009" → full labelled field dump.
 - "Is TMT8-0009 pending or approved?" → from **Status**.
+- "Which samples are pending and which received?" → **status breakdown**.
 - "What's the progress on TMT8-0009?" → from **Progress**.
 - "Who created this sample and when?" → from **Created by / Created on**.
-- "Show me the remarks on …" / "Are there any anomalies?" → from **Remarks / Anomalies**.
+- "Any remarks or anomalies on …?" → from **Remarks / Anomalies**.
 
 ## Configuration
 
